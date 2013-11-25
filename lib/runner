@@ -1,0 +1,73 @@
+#!/usr/bin/env ruby
+
+require 'gacbot'
+require 'optparse'
+
+options = {}
+username = password = nil
+
+optparse = OptionParser.new do|opts|
+# Set a banner, displayed at the top
+# of the help screen.
+  opts.banner = "Usage: gac.rb --username=USER --password=PASS [options]"
+
+# Define the options, and what they do
+  opts.on( '-u', '--username USER', 'Username to login with' ) do |user|
+    username = user
+  end
+
+  opts.on( '-p', '--password PASS', 'Password to login with' ) do |pass|
+    password = pass
+  end
+
+  opts.on( '-a', '--api URL', 'MediaWiki API URL to use' ) do |api|
+    options[:api] = api
+  end
+
+  options[:debug] = false
+  opts.on( '-d', '--debug', 'Run in debug mode; will not make any writes to the live wiki.' ) do
+    options[:debug] = true
+  end
+
+  options[:output] = nil
+  opts.on( '-o', '--output PAGE', 'Page to write output to (overrides ALL default pages)' ) do |output|
+    options[:output] = output
+  end
+
+  options[:data] = nil
+  opts.on( '-D', '--data DIR', 'Directory containing data files') do |data|
+    options[:data] = data
+  end
+
+  options[:no_report] = false
+  opts.on( '--no-report', 'Skip generating the report') do
+    options[:no_report] = true
+  end
+
+  options[:no_template] = false
+  opts.on( '--no-template', 'Skip generating the GACstats template') do
+    options[:no_template] = true
+  end
+
+  options[:no_backlog] = false
+  opts.on( '--no-backlog', 'Skip generating the backlog items template') do
+    options[:no_backlog] = true
+  end
+
+# This displays the help screen, all programs are
+# assumed to have this option.
+  opts.on( '-h', '--help', 'Display this screen' ) do
+    puts opts
+    exit
+  end
+end
+
+optparse.parse!
+
+unless username and password
+  puts "Username and password are required"
+  puts optparse.banner 
+  exit 1
+end
+
+GACBot::Bot.new(username, password, options)
