@@ -17,7 +17,7 @@ Gem::Specification.new do |gem|
   gem.test_files    = gem.files.grep(%r{^(test|spec|features)/})
   gem.require_paths = ["lib"]
 
-  gem.add_dependency 'wikibot', '0.2.4.1'
+  gem.add_dependency 'wikibot', '0.2.4.2'
   gem.add_dependency 'andand'
   gem.add_dependency 'rubytree', '0.5.2'
 end
