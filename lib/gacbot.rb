@@ -28,7 +28,7 @@ module GACBot
     IMG_2O = "[[Image:Symbol neutral vote.svg|15px|2nd Opinion Requested]]"
 
     MAX_QUERY_TRIES = 3
-    DELAY_BETWEEN_RETRIES = 5
+    DELAY_BETWEEN_RETRIES = 10
 
     attr_reader :verbosity
 
@@ -364,7 +364,7 @@ eor
         message "Curb failed with response code #{e.curb.response_code}.", color
 
         if tries < MAX_QUERY_TRIES
-          delay = 1 * tries
+          delay = DELAY_BETWEEN_RETRIES * tries
 
           message "Sleeping for #{delay}s...", color
           sleep delay
