@@ -1,3 +1,3 @@
-module Gacbot
-  VERSION = "1.0.0"
+module GACBot
+  VERSION = "2.0.5"
 end

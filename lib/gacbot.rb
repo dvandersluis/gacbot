@@ -2,7 +2,10 @@ require 'date'
 require 'wikibot'
 require 'andand'
 require 'gacbot/categorytree'
+require 'gacbot/version'
 require 'ext/wikibot/page'
+require 'colored'
+require 'ext/colored'
 
 module GACBot
   class Bot < WikiBot::Bot
@@ -24,55 +27,78 @@ module GACBot
     IMG_UR = "[[Image:Searchtool.svg|15px|Under Review]]"
     IMG_2O = "[[Image:Symbol neutral vote.svg|15px|2nd Opinion Requested]]"
 
+    MAX_QUERY_TRIES = 3
+    DELAY_BETWEEN_RETRIES = 5
+
+    attr_reader :verbosity
+
     def initialize(username, password, options = {})
       @tree = CategoryTree.new
       @now = DateTime.now
       @options = options
+      @verbosity = options[:verbosity] || 0
+
+      unless options[:color]
+        String.class_eval do
+          def color(*); "" end
+          def extra(*); "" end
+        end
+      end
 
       super(username, password, options)
       start unless options[:autostart] == false
     end
 
     def start
-      bot_date = "2012-02-07"
+      bot_date = "2016-01-08"
+      comment = "Generated at #{format_date(Time.now)} by #{@config.username} v#{self.version} (#{bot_date})"
       start_time = Time.now
 
-      puts "Bot starting at #{format_date(Time.now)}."
+      message "Starting GACBot#{ readonly ? " in readonly mode".light_blue : ""}."
+      puts
+
       login
       setup
       get_daily_stats
-      generate_report("Generated at #{format_date(Time.now)} by #{@config.username} v#{self.version} (#{bot_date})") unless @options[:no_report] 
+
+      # Perform the edits
       generate_template unless @options[:no_template]
       update_backlog_items unless @options[:no_backlog]
-      logout
-      puts "Bot completed. #{page_writes} pages written, #{Time.now - start_time}s elapsed."
+      generate_report(comment) unless @options[:no_report] 
 
-    rescue WikiBot::CurbError => e
-      puts "Curb failed with response code #{e.curb.response_code}."
-      puts "Headers:"
-      p e.curb.headers
-      puts "Response:"
-      p e.curb.header_str
-      p e.curb.body_str
+      logout
+      message "Bot completed. #{page_writes.to_s.green} pages written, #{(Time.now - start_time).to_s.green}s elapsed."
 
     rescue WikiBot::APIError => e
-      puts "MediaWiki API responded with error code '#{e.code}' with info '#{e.info}'."
-
-    rescue WikiBot::Bot::LoginError => e
-      puts "Login to wikipedia failed with status '#{e.message}'."
+      failed "MediaWiki API responded with error code '#{e.code}' with info '#{e.info}'."
 
     rescue WikiBot::Page::WriteError => e
-      puts "Writing failed with status '#{e.message}'."  
+      failed "Writing failed with status '#{e.message}'."  
     end
 
     def version
-      "2.0.3"
+      GACBot::VERSION
     end
 
     def setup
+      message "Collecting articles..."
+
       find = /<!-- NOMINATION CATEGORIES BEGIN HERE -->\s*(.*?)\s*<!-- NOMINATION CATEGORIES END HERE -->/im
       content = page(ARTICLE_PAGE).content.match(find)[1]
       @tree.add_categories(content)
+
+      done
+
+      verbose(3) do
+        @tree.each do |node|
+          next if node.isRoot?
+          
+          puts "#{"  " * (node.level - 1)}#{node.name}: #{node.total}"
+        end
+
+        puts "Total: #{@tree.total}"
+        puts
+      end
     end
 
     def get_daily_stats
@@ -121,22 +147,6 @@ module GACBot
     def get_backlog
       backlog = File.open(data_file(:backlog), "r") { |f| f.read }.split(/[\n\r]/).select{ |i| !i.empty? }
       backlog.push("#{@now.strftime("%s")};#{@tree.total};#{@tree.on_hold};#{@tree.on_review};#{@tree.second_opinion}")
-
-      out = format_backlog(backlog.reverse[0...BACKLOG_COUNT])
-
-      File.open(data_file(:backlog), "w") { |f| f.write backlog.join("\n") } unless @debug
-
-      if backlog.size > BACKLOG_COUNT
-        out << ":''Previous daily backlogs can be viewed at the [[#{BACKLOG_SUBPAGE}|backlog archive]].''";
-
-        # Update the backlog archive page
-        archive = format_backlog(backlog[0...-BACKLOG_COUNT])
-        wikitext = "{{/top}}\n\n" + archive.join("<br />\n")
-        edit_msg = "Update of GAN report backlog"
-        page(@options[:output] || BACKLOG_SUBPAGE).write(wikitext, edit_msg, 0)
-      end
-
-      out
     end
 
     def get_exceptions
@@ -233,9 +243,7 @@ eor
       @tree.each do |node|
         next if node.isRoot?
 
-        level = node.parentage.andand.size - 1
-
-        summary = ":" * [level, 0].max + "'''" + ARTICLE_LINK % [node.name, node.name] + "''' (#{node.total})"
+        summary = ":" * [node.level - 1, 0].max + "'''" + ARTICLE_LINK % [node.name, node.name] + "''' (#{node.total})"
 
         if node.total > 0
           summary += ": "
@@ -258,85 +266,177 @@ eor
 
     def generate_report(comment = nil)
       # Create a text string to write to the wiki.
-      template = <<template
-{{#{REPORT_PAGE}/top}}
+      message "Generating report..."
+      
+      template = load_template(:report)
+      backlog = get_backlog
 
-== Oldest nominations ==
-:''List of the oldest ten nominations that have had no activity (placed on hold, under review or requesting a 2nd opinion)''
-%s
-
-== Backlog report ==
-%s
-
-== Exceptions report ==
-%s
-
-== Summary ==
-%s
-template
-
-      wikitext = template % [get_oldest(10).join("\n"), get_backlog.join("<br />\n"), get_exceptions, get_summary]
-      wikitext += "\n<!-- #{comment} -->" if !comment.nil?
       edit_msg = "Daily [[WP:GAN]] report"
+      wikitext = template % [
+        get_oldest(10).join("\n"),
+        format_backlog(backlog.reverse[0...BACKLOG_COUNT]).join("<br />\n"),
+        get_exceptions,
+        get_summary
+      ]
+      wikitext += "\n<!-- #{comment} -->" if !comment.nil?
 
       page(@options[:output] || REPORT_PAGE).write(wikitext, edit_msg)
+
+      done
+
+      update_backlog_archive(backlog)
     end
 
     def generate_template
       # Create a template of important stats.
-      template = <<template
-<includeonly>{{#switch: {{lc:{{{1|}}}}}
-|total|# = %d
-|onhold|oh|on_hold|on hold = %d
-|underreview|ur|under_review|under review = %d
-|2ndopinion|2o|so|2nd|secondopinion|second opinion = %d
-|time|date|stamp|timestamp = %s
-|''No parameter given to template''
-}}</includeonly><noinclude>
-{{documentation}}
-</noinclude>
-template
+      message "Generating GACStats template..."
+
+      template = load_template(:stats)
 
       wikitext = template % [@tree.total, @tree.on_hold, @tree.on_review, @tree.second_opinion, format_date(@now)]
       edit_msg = "Update of [[WP:GAN]] stats template";
 
       page(@options[:output] || TEMPLATE_PAGE).write(wikitext, edit_msg)
+
+      done
     end
 
     def update_backlog_items
+      message "Updating backlog items template..."
+
       backlog = get_oldest(10, true)
       
-      template = <<template
-%s
-<!-- If you clear an item from backlog and want to update the list before the bot next runs,
-here are the next 5 oldest nominations:
-&bull; %s
--->
-template
+      template = load_template(:backlog)
 
       wikitext = template % [backlog[0...5].join("\n&bull; "), backlog[5..-1].join("\n&bull; ")]
       edit_msg = "Update of [[WP:GAC]] backlog list";
 
       page(@options[:output] || BACKLOG_ITEMS_PAGE).write(wikitext, edit_msg)
+      
+      done
+    end
+
+    def update_backlog_archive(backlog)
+      message "Updating backlog archive..."
+
+      File.open(data_file(:backlog), "w") { |f| f.write backlog.join("\n") } unless @debug
+
+      if backlog.size > BACKLOG_COUNT
+        # Update the backlog archive page
+        archive = format_backlog(backlog[0...-BACKLOG_COUNT])
+        wikitext = "{{/top}}\n\n" + archive.join("<br />\n")
+        edit_msg = "Update of GAN report backlog"
+        page(@options[:output] || BACKLOG_SUBPAGE).write(wikitext, edit_msg, 0)
+      end
+
+      done
+    end
+
+    def login
+      message "Logging in as #{@config.username}..."
+      super
+      done
+
+    rescue WikiBot::Bot::LoginError => e
+      failed "Login to wikipedia failed with status '#{e.message}'."
+    end
+
+    def logout
+      message "Logging out..."
+      super
+      done
+    end
+
+    def query_api(method, raw_data = {}, dry_run = false)
+      tries = 1
+
+      begin
+        verbose(raw_data[:action] == :edit ? 2 : 1) do
+          message "Querying API: #{raw_data.to_querystring} [#{method.to_s.upcase}]", false
+        end
+
+        super
+
+      rescue WikiBot::CurbError => e
+        color = tries < MAX_QUERY_TRIES ? :light_red : :red
+
+        message "Attempt ##{tries} failed with error:", color
+        message "Curb failed with response code #{e.curb.response_code}.", color
+
+        if tries < MAX_QUERY_TRIES
+          delay = 1 * tries
+
+          message "Sleeping for #{delay}s...", color
+          sleep delay
+
+          message "Retrying... (attempt ##{tries + 1} of #{MAX_QUERY_TRIES})", color
+          puts
+
+          tries += 1
+          retry
+        else
+          verbose(2) do
+            message "URL: #{e.curb.url}", false
+            message "Headers:", false
+            message e.curb.headers.inspect, false
+            message "Response Headers:", false
+            message e.curb.header_str, false
+
+            if e.curb.body_str
+              message "Response Body:", false
+              message Zlib::GzipReader.new(StringIO.new(e.curb.body_str)).read, false
+            end
+          end
+
+          message "No more retries"
+          failed
+        end
+      end
     end
 
   private
 
+    def message(msg, color = :bright_white, meth = :puts)
+      msg = msg.colorize(msg, :foreground => color) if color
+      time = Time.now
+
+      send(meth, "[#{time.strftime("%Y-%m-%d %H:%I:%S")}.#{((time.to_f * 1000.0).to_i % 1000).to_s.ljust(3, '0')}] #{msg}")
+      $stdout.flush
+    end
+
+    def done
+      message 'Done.', :green
+      puts
+    end
+
+    def failed(msg = nil)
+      puts
+      message(msg, :red) if msg
+      logout if logged_in?
+      exit 1
+    end
+
+    def verbose(level = 1)
+      return unless verbosity >= level
+
+      print "".color(:dark_grey)
+      yield
+      print "\r".extra(:clear)
+    end
+
     def format_backlog(backlog)
-      out = []
-      backlog.each do |bl|
+      backlog.inject([]) do |out, bl|
         timestamp, total, on_hold, under_review, second_opinion = bl.split(';').map{ |e| e.to_i }
         second_opinion = 0 if second_opinion.nil?
 
-        bl_string = format_date(Time.at(timestamp.to_i)) + " &ndash; " +
-          "#{total} nomination" + (total == 1 ? '' : 's') + " outstanding; " +
-          (total - on_hold - under_review - second_opinion).to_s + " not reviewed; " +
-          "#{IMG_OH} x #{on_hold}; #{IMG_UR} x #{under_review}"
-        bl_string += "; #{IMG_2O} x #{second_opinion}" unless second_opinion == 0
-        out << bl_string
-      end
+        date = format_date(Time.at(timestamp.to_i))
+        not_reviewed = total - on_hold - under_review - second_opinion
 
-      out
+        str = "%s &ndash; %d nomination%s outstanding; %d not reviewed; #{IMG_OH} x %d; #{IMG_UR} x %d"
+        str << "; #{IMG_2O} x %d" if second_opinion > 0
+
+        out << str % [date, total, ('s' if total != 1), not_reviewed, on_hold, under_review, second_opinion]
+      end
     end
 
     def data_file(name)
@@ -353,6 +453,11 @@ template
       end
 
       data_dir.join(file_name)
+    end
+
+    def load_template(name)
+      template = File.expand_path("../../templates/#{name}.tpl", __FILE__)
+      File.read(template)
     end
   end
 end

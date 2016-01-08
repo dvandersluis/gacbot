@@ -54,6 +54,20 @@ optparse = OptionParser.new do|opts|
     options[:no_backlog] = true
   end
 
+  options[:readonly] = false
+  opts.on( '-R', '--readonly', 'Run bot in readonly mode (no writes will take place)') do
+    options[:readonly] = true
+  end
+
+  options[:verbosity] = 0
+  opts.on( '-v', '--verbose', 'Run verbosely (use this switch more than once for more verbosity)') do
+    options[:verbosity] += 1
+  end
+
+  opts.on( '--[no-]color', 'Output using color') do |color|
+    options[:color] = color
+  end
+
 # This displays the help screen, all programs are
 # assumed to have this option.
   opts.on( '-h', '--help', 'Display this screen' ) do

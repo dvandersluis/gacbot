@@ -22,6 +22,10 @@ module GACBot
         super(name, content)
       end
 
+      def level
+        parentage.nil? ? 0 : parentage.size
+      end
+
       def add_categories(content, level = 2)
         regex = Regexp.new('^\s*(' + ("=" * level) + ')(?!=)\s*(.+?)\s*\1\s*$')
         offset = 0
